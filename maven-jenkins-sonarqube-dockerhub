@@ -1,0 +1,88 @@
+pipeline {
+    agent any
+
+    environment {
+        scannerHome = tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('Checkout SCM') {
+            steps {
+                checkout scmGit(
+                    branches: [[name: '*/master']],
+                    extensions: [],
+                    userRemoteConfigs: [[url: 'https://github.com/santhosh1100/train-ticket-reservation.git']]
+                )
+            }
+        }
+
+        stage('Maven Compile') {
+            steps {
+                sh 'mvn clean compile'
+            }
+        }
+
+        stage('Maven Test') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('Maven Package') {
+            steps {
+                sh 'mvn package'
+            }
+        }
+
+        stage('Code Analysis with SonarQube') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh """${scannerHome}/bin/sonar-scanner \
+                      -Dsonar.projectKey=trainbook \
+                      -Dsonar.projectName=train-ticket-reservation \
+                      -Dsonar.projectVersion=1.0 \
+                      -Dsonar.sources=src \
+                      -Dsonar.java.binaries=target/classes \
+                      -Dsonar.junit.reportPaths=target/surefire-reports \
+                      -Dsonar.jacoco.reportPaths=target/jacoco.exec \
+                      -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml"""
+                }
+
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage ('Build and push to docker hub') {
+            steps {
+                script {
+                    // Optional: download webapp-runner if your Dockerfile expects it
+                    sh 'curl -L -o target/webapp-runner.jar https://repo1.maven.org/maven2/com/heroku/webapp-runner/9.0.41.0/webapp-runner-9.0.41.0.jar || true'
+
+                    withDockerRegistry(credentialsId: 'docker') {
+                        sh "docker build -t vprofileimg ."
+                        sh "docker tag vprofileimg santhosh1100/v23:latest"
+                        sh "docker push santhosh1100/v23:latest"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Container') {
+            steps {
+                sh 'docker rm -f dock1 || true'
+                sh 'docker run --name dock1 -d -p 8084:8080 santhosh1100/v23:latest'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully.'
+        }
+        failure {
+            echo 'Pipeline failed.'
+        }
+    }
+}
